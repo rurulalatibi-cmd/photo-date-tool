@@ -312,7 +312,7 @@
     if (canShareFiles(files)) {
       navigator.share({ files: files }).then(function () {
         entries.forEach(function (e) {
-          setStatus(e.statusEl, "共有シートから「画像を保存」などを選んで保存してください。", "ok");
+          setStatus(e.statusEl, "共有シートが開いたら「画像を保存」をタップすると、iPhoneの「フォト」に直接保存されます。", "ok");
         });
       }).catch(function (err) {
         if (err && err.name === "AbortError") return;
