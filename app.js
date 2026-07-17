@@ -314,6 +314,7 @@
         entries.forEach(function (e) {
           setStatus(e.statusEl, "共有シートが開いたら「画像を保存」をタップすると、iPhoneの「フォト」に直接保存されます。", "ok");
         });
+        promptToOpenPhotosForCleanup();
       }).catch(function (err) {
         if (err && err.name === "AbortError") return;
         entries.forEach(function (e) {
@@ -328,6 +329,22 @@
           setStatus(e.statusEl, "ダウンロードしました。", "ok");
         }, index * 250);
       });
+    }
+  }
+
+  // The Web Share API never tells us which share target the user picked
+  // (Save Image, AirDrop, cancel, ...), only that the sheet closed without
+  // error. We can't detect or perform the actual deletion — iOS gives web
+  // pages no API for that — so this just asks, and if they confirm, jumps
+  // straight to the Photos app via an Apple-internal (undocumented) URL
+  // scheme so there's one less thing for them to go find themselves.
+  function promptToOpenPhotosForCleanup() {
+    var wantsToOpenPhotos = confirm(
+      "保存が完了しました。今すぐ「フォト」アプリを開いて、元の写真を削除しますか？\n" +
+      "（比較表示の「編集前」の写真と同じものを探して削除してください）"
+    );
+    if (wantsToOpenPhotos) {
+      window.location.href = "photos-redirect://";
     }
   }
 
