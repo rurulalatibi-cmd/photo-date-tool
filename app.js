@@ -1,0 +1,563 @@
+(function () {
+  "use strict";
+
+  var photos = [];
+  var nextId = 1;
+
+  var GATE_PASSWORD = "ruru0320";
+  var GATE_SESSION_KEY = "photoToolAuthed";
+
+  var gateOverlay = document.getElementById("gateOverlay");
+  var gateForm = document.getElementById("gateForm");
+  var gatePassword = document.getElementById("gatePassword");
+  var gateError = document.getElementById("gateError");
+  var homeView = document.getElementById("homeView");
+  var toolView = document.getElementById("toolView");
+  var startBtn = document.getElementById("startBtn");
+  var backHomeBtn = document.getElementById("backHomeBtn");
+
+  var dropzone = document.getElementById("dropzone");
+  var fileInput = document.getElementById("fileInput");
+  var photoList = document.getElementById("photoList");
+  var bulkPanel = document.getElementById("bulkPanel");
+  var bulkDateTime = document.getElementById("bulkDateTime");
+  var bulkApplyBtn = document.getElementById("bulkApplyBtn");
+  var bulkRemoveBtn = document.getElementById("bulkRemoveBtn");
+  var selectAllBtn = document.getElementById("selectAllBtn");
+  var selectNoneBtn = document.getElementById("selectNoneBtn");
+  var selectedCountHint = document.getElementById("selectedCountHint");
+
+  // --- Password gate ---------------------------------------------------
+  // Client-side only: this keeps casual visitors out but is NOT real
+  // security (the password is visible in the page source to anyone who
+  // looks). Don't rely on it to protect anything sensitive.
+  function showGated() {
+    var authed = false;
+    try {
+      authed = sessionStorage.getItem(GATE_SESSION_KEY) === "1";
+    } catch (err) {
+      authed = false;
+    }
+    if (authed) {
+      gateOverlay.hidden = true;
+      homeView.hidden = false;
+    } else {
+      gateOverlay.hidden = false;
+      homeView.hidden = true;
+    }
+    toolView.hidden = true;
+  }
+
+  gateForm.addEventListener("submit", function (e) {
+    e.preventDefault();
+    if (gatePassword.value === GATE_PASSWORD) {
+      try {
+        sessionStorage.setItem(GATE_SESSION_KEY, "1");
+      } catch (err) {
+        // ignore storage failures (e.g. private mode quota); still proceed.
+      }
+      gateError.hidden = true;
+      gateOverlay.hidden = true;
+      homeView.hidden = false;
+    } else {
+      gateError.hidden = false;
+      gatePassword.value = "";
+      gatePassword.focus();
+    }
+  });
+
+  startBtn.addEventListener("click", function () {
+    homeView.hidden = true;
+    toolView.hidden = false;
+  });
+
+  backHomeBtn.addEventListener("click", function () {
+    toolView.hidden = true;
+    homeView.hidden = false;
+  });
+
+  showGated();
+
+  fileInput.addEventListener("change", function (e) {
+    addFiles(e.target.files);
+    fileInput.value = "";
+  });
+
+  ["dragenter", "dragover"].forEach(function (evt) {
+    dropzone.addEventListener(evt, function (e) {
+      e.preventDefault();
+      dropzone.classList.add("dragover");
+    });
+  });
+  ["dragleave", "drop"].forEach(function (evt) {
+    dropzone.addEventListener(evt, function (e) {
+      e.preventDefault();
+      dropzone.classList.remove("dragover");
+    });
+  });
+  dropzone.addEventListener("drop", function (e) {
+    if (e.dataTransfer && e.dataTransfer.files) {
+      addFiles(e.dataTransfer.files);
+    }
+  });
+
+  function selectedSupportedPhotos() {
+    return photos.filter(function (p) { return p.supported && p.selected; });
+  }
+
+  selectAllBtn.addEventListener("click", function () {
+    photos.forEach(function (p) { if (p.supported) p.selected = true; });
+    renderPhotoList();
+  });
+
+  selectNoneBtn.addEventListener("click", function () {
+    photos.forEach(function (p) { if (p.supported) p.selected = false; });
+    renderPhotoList();
+  });
+
+  bulkApplyBtn.addEventListener("click", function () {
+    var value = bulkDateTime.value;
+    if (!value) {
+      alert("日時を入力してください。");
+      return;
+    }
+    var exifDate = localInputValueToExifDate(value);
+    var selected = selectedSupportedPhotos();
+    if (selected.length === 0) {
+      alert("対象の写真が選択されていません。");
+      return;
+    }
+    var entries = [];
+    selected.forEach(function (photo) {
+      var statusEl = document.getElementById("status-" + photo.id);
+      try {
+        var newDataURL = buildDateEditedDataURL(photo, exifDate);
+        setCompareResult(photo, newDataURL, exifDate, null);
+        entries.push({ dataURL: newDataURL, filename: suffixedName(photo.name, "date_edited"), statusEl: statusEl });
+      } catch (err) {
+        setStatus(statusEl, "更新に失敗しました: " + err.message, "error");
+      }
+    });
+    saveFiles(entries);
+  });
+
+  bulkRemoveBtn.addEventListener("click", function () {
+    var selected = selectedSupportedPhotos();
+    if (selected.length === 0) {
+      alert("対象の写真が選択されていません。");
+      return;
+    }
+    if (!confirm("選択した" + selected.length + "枚の写真から、撮影日時・位置情報・機種情報などEXIF情報をすべて削除してダウンロードします。よろしいですか?")) {
+      return;
+    }
+    var entries = [];
+    selected.forEach(function (photo) {
+      var statusEl = document.getElementById("status-" + photo.id);
+      try {
+        var newDataURL = buildExifRemovedDataURL(photo);
+        setCompareResult(photo, newDataURL, null, "EXIF情報なし（削除済み）");
+        entries.push({ dataURL: newDataURL, filename: suffixedName(photo.name, "no_exif"), statusEl: statusEl });
+      } catch (err) {
+        setStatus(statusEl, "削除に失敗しました: " + err.message, "error");
+      }
+    });
+    saveFiles(entries);
+  });
+
+  function addFiles(fileList) {
+    var files = Array.prototype.slice.call(fileList || []);
+    if (files.length === 0) return;
+
+    files.forEach(function (file) {
+      var photo = {
+        id: nextId++,
+        file: file,
+        name: file.name,
+        dataURL: null,
+        supported: false,
+        selected: true,
+        error: null
+      };
+      photos.push(photo);
+
+      var reader = new FileReader();
+      reader.onload = function () {
+        photo.dataURL = reader.result;
+        try {
+          var isJpeg = photo.dataURL.indexOf("data:image/jpeg;base64,") === 0 ||
+            photo.dataURL.indexOf("data:image/jpg;base64,") === 0;
+          if (!isJpeg) {
+            throw new Error("not-jpeg");
+          }
+          photo.exifDict = piexif.load(photo.dataURL);
+          photo.supported = true;
+          photo.originalDateString = currentExifDateString(photo);
+        } catch (err) {
+          photo.supported = false;
+          photo.error = "JPEG形式ではないため処理できません（HEICなど）。iPhoneの「設定 > カメラ > フォーマット」を「互換性優先」にするか、共有時にJPEGとして書き出してから読み込んでください。";
+        }
+        renderPhotoList();
+      };
+      reader.onerror = function () {
+        photo.supported = false;
+        photo.error = "ファイルの読み込みに失敗しました。";
+        renderPhotoList();
+      };
+      reader.readAsDataURL(file);
+    });
+
+    renderPhotoList();
+  }
+
+  function currentExifDateString(photo) {
+    if (!photo.exifDict) return null;
+    var exifIfd = photo.exifDict["Exif"] || {};
+    var zerothIfd = photo.exifDict["0th"] || {};
+    return exifIfd[piexif.ExifIFD.DateTimeOriginal] ||
+      exifIfd[piexif.ExifIFD.DateTimeDigitized] ||
+      zerothIfd[piexif.ImageIFD.DateTime] ||
+      null;
+  }
+
+  function exifDateToLocalInputValue(exifDateStr) {
+    // "YYYY:MM:DD HH:MM:SS" -> "YYYY-MM-DDTHH:MM:SS"
+    var m = /^(\d{4}):(\d{2}):(\d{2}) (\d{2}):(\d{2}):(\d{2})/.exec(exifDateStr || "");
+    if (!m) return "";
+    return m[1] + "-" + m[2] + "-" + m[3] + "T" + m[4] + ":" + m[5] + ":" + m[6];
+  }
+
+  function localInputValueToExifDate(value) {
+    // "YYYY-MM-DDTHH:MM:SS" (or without seconds) -> "YYYY:MM:DD HH:MM:SS"
+    var parts = value.split("T");
+    var datePart = parts[0].split("-").join(":");
+    var timePart = parts[1] || "00:00:00";
+    if (timePart.split(":").length === 2) {
+      timePart += ":00";
+    }
+    return datePart + " " + timePart;
+  }
+
+  function dataURLtoBlob(dataURL) {
+    var arr = dataURL.split(",");
+    var mimeMatch = arr[0].match(/:(.*?);/);
+    var mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
+    var bstr = atob(arr[1]);
+    var n = bstr.length;
+    var u8arr = new Uint8Array(n);
+    while (n--) {
+      u8arr[n] = bstr.charCodeAt(n);
+    }
+    return new Blob([u8arr], { type: mime });
+  }
+
+  function suffixedName(name, suffix) {
+    var dot = name.lastIndexOf(".");
+    if (dot === -1) return name + "_" + suffix;
+    return name.slice(0, dot) + "_" + suffix + name.slice(dot);
+  }
+
+  function setStatus(statusEl, text, kind) {
+    if (!statusEl) return;
+    statusEl.textContent = text;
+    statusEl.className = "status" + (kind ? " " + kind : "");
+  }
+
+  // Safari (particularly iOS/Private Browsing) frequently ignores the
+  // <a download> attribute on blob: URLs and just navigates to the blob,
+  // which breaks the app. The Web Share API sidesteps that entirely by
+  // handing the file to the native share sheet, so prefer it when available.
+  function canShareFiles(files) {
+    try {
+      return !!(navigator.canShare && navigator.share && navigator.canShare({ files: files }));
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function dataURLtoFile(dataURL, filename) {
+    var blob = dataURLtoBlob(dataURL);
+    return new File([blob], filename, { type: blob.type });
+  }
+
+  function downloadViaAnchor(dataURL, filename) {
+    var blob = dataURLtoBlob(dataURL);
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    // If the browser ignores `download` and navigates instead, open a new
+    // tab rather than destroying this page's state.
+    a.target = "_blank";
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+  }
+
+  function saveFile(dataURL, filename, statusEl) {
+    saveFiles([{ dataURL: dataURL, filename: filename, statusEl: statusEl }]);
+  }
+
+  function saveFiles(entries) {
+    if (entries.length === 0) return;
+    var files = entries.map(function (e) { return dataURLtoFile(e.dataURL, e.filename); });
+
+    if (canShareFiles(files)) {
+      navigator.share({ files: files }).then(function () {
+        entries.forEach(function (e) {
+          setStatus(e.statusEl, "共有シートから「画像を保存」などを選んで保存してください。", "ok");
+        });
+      }).catch(function (err) {
+        if (err && err.name === "AbortError") return;
+        entries.forEach(function (e) {
+          downloadViaAnchor(e.dataURL, e.filename);
+          setStatus(e.statusEl, "ダウンロードしました。", "ok");
+        });
+      });
+    } else {
+      entries.forEach(function (e, index) {
+        setTimeout(function () {
+          downloadViaAnchor(e.dataURL, e.filename);
+          setStatus(e.statusEl, "ダウンロードしました。", "ok");
+        }, index * 250);
+      });
+    }
+  }
+
+  function buildDateEditedDataURL(photo, exifDateStr) {
+    var exifDict = photo.exifDict;
+    exifDict["0th"] = exifDict["0th"] || {};
+    exifDict["Exif"] = exifDict["Exif"] || {};
+    exifDict["0th"][piexif.ImageIFD.DateTime] = exifDateStr;
+    exifDict["Exif"][piexif.ExifIFD.DateTimeOriginal] = exifDateStr;
+    exifDict["Exif"][piexif.ExifIFD.DateTimeDigitized] = exifDateStr;
+    var exifBytes = piexif.dump(exifDict);
+    return piexif.insert(exifBytes, photo.dataURL);
+  }
+
+  function buildExifRemovedDataURL(photo) {
+    var stripped = piexif.remove(photo.dataURL);
+    // Orientation lives in EXIF too; without it, a photo shot in portrait
+    // (very common on iPhone) would render sideways after stripping.
+    var zerothIfd = photo.exifDict && photo.exifDict["0th"];
+    var orientation = zerothIfd && zerothIfd[piexif.ImageIFD.Orientation];
+    if (orientation && orientation !== 1) {
+      var exifDict = { "0th": {}, "Exif": {}, "GPS": {}, "Interop": {}, "1st": {}, "thumbnail": null };
+      exifDict["0th"][piexif.ImageIFD.Orientation] = orientation;
+      var exifBytes = piexif.dump(exifDict);
+      stripped = piexif.insert(exifBytes, stripped);
+    }
+    return stripped;
+  }
+
+  function formatDisplayDate(exifDateStr) {
+    if (!exifDateStr) return null;
+    return exifDateStr.replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1/$2/$3");
+  }
+
+  function buildCompareColumn(label, dataURL, dateText) {
+    var col = document.createElement("div");
+    col.className = "compare-col";
+    var labelEl = document.createElement("div");
+    labelEl.className = "compare-label";
+    labelEl.textContent = label;
+    col.appendChild(labelEl);
+    var img = document.createElement("img");
+    img.src = dataURL;
+    col.appendChild(img);
+    var dateEl = document.createElement("div");
+    dateEl.className = "compare-date";
+    dateEl.textContent = dateText;
+    col.appendChild(dateEl);
+    return col;
+  }
+
+  function setCompareResult(photo, afterDataURL, afterExifDateStr, afterNote) {
+    photo.compareResult = { afterDataURL: afterDataURL, afterExifDateStr: afterExifDateStr, afterNote: afterNote };
+    renderCompare(photo);
+  }
+
+  // Re-renders the before/after panel from photo.compareResult. Called both
+  // right after processing and when the whole list re-renders (e.g. more
+  // photos get added), so an already-processed photo doesn't lose its panel.
+  function renderCompare(photo) {
+    var panel = document.getElementById("compare-" + photo.id);
+    if (!panel || !photo.compareResult) return;
+    panel.innerHTML = "";
+    panel.hidden = false;
+    panel.classList.toggle("resolved", !!photo.originalDeleted);
+
+    panel.appendChild(buildCompareColumn(
+      "編集前（元の写真）",
+      photo.dataURL,
+      formatDisplayDate(photo.originalDateString) || "撮影日時の情報なし"
+    ));
+    panel.appendChild(buildCompareColumn(
+      "編集後（保存したファイル）",
+      photo.compareResult.afterDataURL,
+      photo.compareResult.afterNote || formatDisplayDate(photo.compareResult.afterExifDateStr) || ""
+    ));
+
+    var hint = document.createElement("p");
+    hint.className = "compare-hint";
+    hint.textContent = "「フォト」アプリを開き、左の「編集前」と同じ写真（同じ撮影日時・同じ見た目のもの）を探して削除してください。";
+    panel.appendChild(hint);
+
+    var checkLabel = document.createElement("label");
+    checkLabel.className = "compare-check";
+    var checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = !!photo.originalDeleted;
+    checkbox.addEventListener("change", function () {
+      photo.originalDeleted = checkbox.checked;
+      panel.classList.toggle("resolved", checkbox.checked);
+    });
+    checkLabel.appendChild(checkbox);
+    checkLabel.appendChild(document.createTextNode(" 元の写真をフォトから削除した"));
+    panel.appendChild(checkLabel);
+  }
+
+  function applyDateAndDownload(photo, exifDateStr) {
+    var statusEl = document.getElementById("status-" + photo.id);
+    try {
+      var newDataURL = buildDateEditedDataURL(photo, exifDateStr);
+      setCompareResult(photo, newDataURL, exifDateStr, null);
+      saveFile(newDataURL, suffixedName(photo.name, "date_edited"), statusEl);
+    } catch (err) {
+      setStatus(statusEl, "更新に失敗しました: " + err.message, "error");
+    }
+  }
+
+  function removeExifAndDownload(photo) {
+    var statusEl = document.getElementById("status-" + photo.id);
+    try {
+      var newDataURL = buildExifRemovedDataURL(photo);
+      setCompareResult(photo, newDataURL, null, "EXIF情報なし（削除済み）");
+      saveFile(newDataURL, suffixedName(photo.name, "no_exif"), statusEl);
+    } catch (err) {
+      setStatus(statusEl, "削除に失敗しました: " + err.message, "error");
+    }
+  }
+
+  function renderPhotoList() {
+    var supportedPhotos = photos.filter(function (p) { return p.supported; });
+    bulkPanel.hidden = supportedPhotos.length === 0;
+    var selectedCount = supportedPhotos.filter(function (p) { return p.selected; }).length;
+    selectedCountHint.textContent = supportedPhotos.length
+      ? selectedCount + " / " + supportedPhotos.length + " 枚を選択中"
+      : "";
+
+    photoList.innerHTML = "";
+    photos.forEach(function (photo) {
+      var card = document.createElement("div");
+      card.className = "photo-card" + (photo.supported ? "" : " unsupported");
+
+      var img = document.createElement("img");
+      if (photo.dataURL) img.src = photo.dataURL;
+      card.appendChild(img);
+
+      var info = document.createElement("div");
+
+      if (!photo.supported) {
+        var nameEl0 = document.createElement("div");
+        nameEl0.className = "name";
+        nameEl0.textContent = photo.name;
+        info.appendChild(nameEl0);
+        var errEl = document.createElement("div");
+        errEl.className = "status error";
+        errEl.textContent = photo.error || "読み込み中...";
+        info.appendChild(errEl);
+        card.appendChild(info);
+        photoList.appendChild(card);
+        return;
+      }
+
+      var nameRow = document.createElement("div");
+      nameRow.className = "name-row";
+      var selectLabel = document.createElement("label");
+      selectLabel.className = "select-check";
+      var selectCheckbox = document.createElement("input");
+      selectCheckbox.type = "checkbox";
+      selectCheckbox.checked = !!photo.selected;
+      selectCheckbox.setAttribute("aria-label", "一括操作の対象にする");
+      selectCheckbox.addEventListener("change", function () {
+        photo.selected = selectCheckbox.checked;
+        var supportedPhotos = photos.filter(function (p) { return p.supported; });
+        var selectedCount = supportedPhotos.filter(function (p) { return p.selected; }).length;
+        selectedCountHint.textContent = selectedCount + " / " + supportedPhotos.length + " 枚を選択中";
+      });
+      selectLabel.appendChild(selectCheckbox);
+      nameRow.appendChild(selectLabel);
+
+      var nameEl = document.createElement("div");
+      nameEl.className = "name";
+      nameEl.textContent = photo.name;
+      nameRow.appendChild(nameEl);
+      info.appendChild(nameRow);
+
+      var currentDate = currentExifDateString(photo);
+      var dateInfoEl = document.createElement("div");
+      dateInfoEl.className = "current-date";
+      dateInfoEl.textContent = currentDate
+        ? "現在の撮影日時: " + currentDate.replace(/^(\d{4}):(\d{2}):(\d{2})/, "$1/$2/$3")
+        : "現在の撮影日時: 情報なし";
+      info.appendChild(dateInfoEl);
+
+      var row = document.createElement("div");
+      row.className = "row";
+
+      var dateInput = document.createElement("input");
+      dateInput.type = "datetime-local";
+      dateInput.step = "1";
+      dateInput.value = currentDate ? exifDateToLocalInputValue(currentDate) : "";
+      row.appendChild(dateInput);
+
+      var updateBtn = document.createElement("button");
+      updateBtn.type = "button";
+      updateBtn.textContent = "この日時に更新してダウンロード";
+      updateBtn.addEventListener("click", function () {
+        if (!dateInput.value) {
+          alert("日時を入力してください。");
+          return;
+        }
+        applyDateAndDownload(photo, localInputValueToExifDate(dateInput.value));
+      });
+      row.appendChild(updateBtn);
+
+      info.appendChild(row);
+
+      var row2 = document.createElement("div");
+      row2.className = "row";
+      var removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "danger";
+      removeBtn.textContent = "EXIFを完全削除してダウンロード";
+      removeBtn.addEventListener("click", function () {
+        if (!confirm("撮影日時・位置情報・機種情報などEXIF情報をすべて削除します。よろしいですか?")) return;
+        removeExifAndDownload(photo);
+      });
+      row2.appendChild(removeBtn);
+      info.appendChild(row2);
+
+      var statusEl = document.createElement("div");
+      statusEl.className = "status";
+      statusEl.id = "status-" + photo.id;
+      info.appendChild(statusEl);
+
+      var comparePanel = document.createElement("div");
+      comparePanel.className = "compare";
+      comparePanel.id = "compare-" + photo.id;
+      comparePanel.hidden = true;
+      info.appendChild(comparePanel);
+
+      card.appendChild(info);
+      photoList.appendChild(card);
+
+      // Must happen after the card is attached: renderCompare() looks the
+      // panel up via document.getElementById(), which only finds elements
+      // that are actually in the live document tree.
+      if (photo.compareResult) renderCompare(photo);
+    });
+  }
+})();
