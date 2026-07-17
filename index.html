@@ -45,7 +45,7 @@
   <h1>写真の撮影日時 編集・削除ツール</h1>
   <p class="lead">
     写真ファイルはこの端末・ブラウザの中だけで処理されます。どこにもアップロードされません。<br>
-    対応形式は <strong>JPEG</strong>（.jpg / .jpeg）のみです。HEIC形式の写真は、iPhoneの
+    対応形式は <strong>JPEG</strong>（.jpg / .jpeg）と<strong>PNG</strong>（.png）です。HEIC形式の写真は、iPhoneの
     「設定 &gt; カメラ &gt; フォーマット」を「互換性優先」にするか、共有時に「JPEGとして送信」を選ぶとJPEGで書き出せます。
   </p>
 </header>
@@ -53,7 +53,7 @@
 <main>
   <section class="dropzone" id="dropzone">
     <p>ここに写真をドラッグ&amp;ドロップ、またはクリックしてファイルを選択（複数選択可）</p>
-    <input type="file" id="fileInput" accept="image/jpeg" multiple>
+    <input type="file" id="fileInput" accept="image/jpeg,image/png" multiple>
   </section>
 
   <section class="bulk-panel" id="bulkPanel" hidden>

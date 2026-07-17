@@ -186,15 +186,21 @@
         try {
           var isJpeg = photo.dataURL.indexOf("data:image/jpeg;base64,") === 0 ||
             photo.dataURL.indexOf("data:image/jpg;base64,") === 0;
-          if (!isJpeg) {
-            throw new Error("not-jpeg");
+          var isPng = photo.dataURL.indexOf("data:image/png;base64,") === 0;
+          if (isJpeg) {
+            photo.format = "jpeg";
+            photo.exifDict = piexif.load(photo.dataURL);
+          } else if (isPng) {
+            photo.format = "png";
+            photo.exifDict = readPngExifDict(photo.dataURL);
+          } else {
+            throw new Error("unsupported-format");
           }
-          photo.exifDict = piexif.load(photo.dataURL);
           photo.supported = true;
           photo.originalDateString = currentExifDateString(photo);
         } catch (err) {
           photo.supported = false;
-          photo.error = "JPEG形式ではないため処理できません（HEICなど）。iPhoneの「設定 > カメラ > フォーマット」を「互換性優先」にするか、共有時にJPEGとして書き出してから読み込んでください。";
+          photo.error = "JPEG・PNG以外の形式では処理できません（HEICなど）。iPhoneの「設定 > カメラ > フォーマット」を「互換性優先」にするか、共有時にJPEGとして書き出してから読み込んでください。";
         }
         renderPhotoList();
       };
@@ -325,18 +331,28 @@
     }
   }
 
-  function buildDateEditedDataURL(photo, exifDateStr) {
-    var exifDict = photo.exifDict;
+  function applyDateFieldsToExifDict(exifDict, exifDateStr) {
     exifDict["0th"] = exifDict["0th"] || {};
     exifDict["Exif"] = exifDict["Exif"] || {};
     exifDict["0th"][piexif.ImageIFD.DateTime] = exifDateStr;
     exifDict["Exif"][piexif.ExifIFD.DateTimeOriginal] = exifDateStr;
     exifDict["Exif"][piexif.ExifIFD.DateTimeDigitized] = exifDateStr;
+    return exifDict;
+  }
+
+  function buildDateEditedDataURL(photo, exifDateStr) {
+    if (photo.format === "png") {
+      return buildPngDateEditedDataURL(photo, exifDateStr);
+    }
+    var exifDict = applyDateFieldsToExifDict(photo.exifDict, exifDateStr);
     var exifBytes = piexif.dump(exifDict);
     return piexif.insert(exifBytes, photo.dataURL);
   }
 
   function buildExifRemovedDataURL(photo) {
+    if (photo.format === "png") {
+      return buildPngExifRemovedDataURL(photo);
+    }
     var stripped = piexif.remove(photo.dataURL);
     // Orientation lives in EXIF too; without it, a photo shot in portrait
     // (very common on iPhone) would render sideways after stripping.
@@ -349,6 +365,115 @@
       stripped = piexif.insert(exifBytes, stripped);
     }
     return stripped;
+  }
+
+  // ---- PNG EXIF support -------------------------------------------------
+  // piexifjs only understands JPEG's APP1 segment. PNG stores EXIF in its
+  // own "eXIf" chunk, holding the same raw TIFF bytes but WITHOUT the
+  // 6-byte "Exif\0\0" prefix JPEG uses. So: fake that prefix on read (to
+  // reuse piexif's TIFF parser) and strip it back off on write.
+
+  var PNG_SIGNATURE = "\x89PNG\r\n\x1a\n";
+  var CRC_TABLE = (function () {
+    var table = [];
+    for (var n = 0; n < 256; n++) {
+      var c = n;
+      for (var k = 0; k < 8; k++) {
+        c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      table[n] = c >>> 0;
+    }
+    return table;
+  })();
+
+  function crc32(str) {
+    var crc = 0xffffffff;
+    for (var i = 0; i < str.length; i++) {
+      crc = CRC_TABLE[(crc ^ str.charCodeAt(i)) & 0xff] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  function readUint32BE(str, offset) {
+    return ((str.charCodeAt(offset) << 24) |
+      (str.charCodeAt(offset + 1) << 16) |
+      (str.charCodeAt(offset + 2) << 8) |
+      str.charCodeAt(offset + 3)) >>> 0;
+  }
+
+  function writeUint32BE(n) {
+    return String.fromCharCode((n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff);
+  }
+
+  function parsePngChunks(bin) {
+    var pos = 8; // skip the 8-byte PNG signature
+    var chunks = [];
+    while (pos < bin.length) {
+      var length = readUint32BE(bin, pos);
+      var type = bin.substr(pos + 4, 4);
+      var data = bin.substr(pos + 8, length);
+      chunks.push({ type: type, data: data });
+      pos += 12 + length; // length(4) + type(4) + data + crc(4)
+      if (type === "IEND") break;
+    }
+    return chunks;
+  }
+
+  function serializePngChunks(chunks) {
+    var out = PNG_SIGNATURE;
+    for (var i = 0; i < chunks.length; i++) {
+      var type = chunks[i].type;
+      var data = chunks[i].data;
+      out += writeUint32BE(data.length) + type + data + writeUint32BE(crc32(type + data));
+    }
+    return out;
+  }
+
+  function dataURLtoBinaryString(dataURL) {
+    return atob(dataURL.split(",")[1]);
+  }
+
+  function binaryStringToDataURL(bin, mime) {
+    return "data:" + mime + ";base64," + btoa(bin);
+  }
+
+  function readPngExifDict(dataURL) {
+    var emptyDict = { "0th": {}, "Exif": {}, "GPS": {}, "Interop": {}, "1st": {}, "thumbnail": null };
+    var chunks = parsePngChunks(dataURLtoBinaryString(dataURL));
+    var exifChunk = null;
+    for (var i = 0; i < chunks.length; i++) {
+      if (chunks[i].type === "eXIf") { exifChunk = chunks[i]; break; }
+    }
+    if (!exifChunk) return emptyDict;
+    try {
+      return piexif.load("Exif\x00\x00" + exifChunk.data);
+    } catch (err) {
+      return emptyDict;
+    }
+  }
+
+  function replacePngExifChunk(dataURL, tiffBytes) {
+    var chunks = parsePngChunks(dataURLtoBinaryString(dataURL));
+    chunks = chunks.filter(function (c) { return c.type !== "eXIf"; });
+    if (tiffBytes !== null) {
+      var ihdrIndex = 0;
+      for (var i = 0; i < chunks.length; i++) {
+        if (chunks[i].type === "IHDR") { ihdrIndex = i; break; }
+      }
+      chunks.splice(ihdrIndex + 1, 0, { type: "eXIf", data: tiffBytes });
+    }
+    return binaryStringToDataURL(serializePngChunks(chunks), "image/png");
+  }
+
+  function buildPngDateEditedDataURL(photo, exifDateStr) {
+    var exifDict = applyDateFieldsToExifDict(photo.exifDict, exifDateStr);
+    var exifBytesWithPrefix = piexif.dump(exifDict);
+    var tiffBytes = exifBytesWithPrefix.slice(6); // drop the "Exif\0\0" prefix
+    return replacePngExifChunk(photo.dataURL, tiffBytes);
+  }
+
+  function buildPngExifRemovedDataURL(photo) {
+    return replacePngExifChunk(photo.dataURL, null);
   }
 
   function formatDisplayDate(exifDateStr) {
