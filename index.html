@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>写真 日時編集・削除ツール</title>
+<title>写真 日時編集ツール</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -23,14 +23,14 @@
     <div class="home-photo" aria-hidden="true"></div>
     <div class="home-scrim" aria-hidden="true"></div>
     <div class="home-copy">
-      <h1>写真の撮影日時 編集・削除ツール</h1>
+      <h1>写真の撮影日時 編集ツール</h1>
       <p class="lead">
-        iPhoneで撮ったJPEG写真のEXIF撮影日時を書き換えたり、EXIF情報（撮影日時・位置情報・カメラ機種名など）を
-        まるごと削除したりできます。写真はこのページの中だけで処理され、どこにもアップロードされません。
+        iPhoneで撮ったJPEG・PNG写真のEXIF撮影日時を書き換えられます。写真はこのページの中だけで処理され、
+        どこにもアップロードされません。
       </p>
       <ol class="steps">
         <li><span class="step-num">1</span>写真を選択する（複数選択も可）</li>
-        <li><span class="step-num">2</span>撮影日時を編集する、またはEXIFを完全に削除する</li>
+        <li><span class="step-num">2</span>撮影日時を編集する</li>
         <li><span class="step-num">3</span>編集前後を見比べて、「フォト」アプリから元の写真を削除する</li>
       </ol>
       <button id="startBtn" type="button" class="cta">使ってみる</button>
@@ -42,7 +42,7 @@
 <div class="page">
 <header>
   <button id="backHomeBtn" type="button" class="secondary back-btn">&larr; トップに戻る</button>
-  <h1>写真の撮影日時 編集・削除ツール</h1>
+  <h1>写真の撮影日時 編集ツール</h1>
   <p class="lead">
     写真ファイルはこの端末・ブラウザの中だけで処理されます。どこにもアップロードされません。<br>
     対応形式は <strong>JPEG</strong>（.jpg / .jpeg）と<strong>PNG</strong>（.png）です。HEIC形式の写真は、iPhoneの
@@ -67,10 +67,6 @@
       <label for="bulkDateTime">新しい日時をまとめて設定</label>
       <input type="datetime-local" id="bulkDateTime" step="1">
       <button id="bulkApplyBtn" type="button">選択した写真に適用してダウンロード</button>
-    </div>
-    <div class="bulk-row">
-      <button id="bulkRemoveBtn" type="button" class="danger">選択した写真からEXIF情報を完全に削除してダウンロード</button>
-      <span class="hint">撮影日時だけでなく、位置情報・カメラ機種名などEXIF全体を削除します。</span>
     </div>
   </section>
 
