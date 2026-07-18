@@ -22,7 +22,6 @@
   var bulkPanel = document.getElementById("bulkPanel");
   var bulkDateTime = document.getElementById("bulkDateTime");
   var bulkApplyBtn = document.getElementById("bulkApplyBtn");
-  var bulkRemoveBtn = document.getElementById("bulkRemoveBtn");
   var selectAllBtn = document.getElementById("selectAllBtn");
   var selectNoneBtn = document.getElementById("selectNoneBtn");
   var selectedCountHint = document.getElementById("selectedCountHint");
@@ -132,33 +131,10 @@
       var statusEl = document.getElementById("status-" + photo.id);
       try {
         var newDataURL = buildDateEditedDataURL(photo, exifDate);
-        setCompareResult(photo, newDataURL, exifDate, null);
+        setCompareResult(photo, newDataURL, exifDate);
         entries.push({ dataURL: newDataURL, filename: suffixedName(photo.name, "date_edited"), statusEl: statusEl });
       } catch (err) {
         setStatus(statusEl, "更新に失敗しました: " + err.message, "error");
-      }
-    });
-    saveFiles(entries);
-  });
-
-  bulkRemoveBtn.addEventListener("click", function () {
-    var selected = selectedSupportedPhotos();
-    if (selected.length === 0) {
-      alert("対象の写真が選択されていません。");
-      return;
-    }
-    if (!confirm("選択した" + selected.length + "枚の写真から、撮影日時・位置情報・機種情報などEXIF情報をすべて削除してダウンロードします。よろしいですか?")) {
-      return;
-    }
-    var entries = [];
-    selected.forEach(function (photo) {
-      var statusEl = document.getElementById("status-" + photo.id);
-      try {
-        var newDataURL = buildExifRemovedDataURL(photo);
-        setCompareResult(photo, newDataURL, null, "EXIF情報なし（削除済み）");
-        entries.push({ dataURL: newDataURL, filename: suffixedName(photo.name, "no_exif"), statusEl: statusEl });
-      } catch (err) {
-        setStatus(statusEl, "削除に失敗しました: " + err.message, "error");
       }
     });
     saveFiles(entries);
@@ -366,24 +342,6 @@
     return piexif.insert(exifBytes, photo.dataURL);
   }
 
-  function buildExifRemovedDataURL(photo) {
-    if (photo.format === "png") {
-      return buildPngExifRemovedDataURL(photo);
-    }
-    var stripped = piexif.remove(photo.dataURL);
-    // Orientation lives in EXIF too; without it, a photo shot in portrait
-    // (very common on iPhone) would render sideways after stripping.
-    var zerothIfd = photo.exifDict && photo.exifDict["0th"];
-    var orientation = zerothIfd && zerothIfd[piexif.ImageIFD.Orientation];
-    if (orientation && orientation !== 1) {
-      var exifDict = { "0th": {}, "Exif": {}, "GPS": {}, "Interop": {}, "1st": {}, "thumbnail": null };
-      exifDict["0th"][piexif.ImageIFD.Orientation] = orientation;
-      var exifBytes = piexif.dump(exifDict);
-      stripped = piexif.insert(exifBytes, stripped);
-    }
-    return stripped;
-  }
-
   // ---- PNG EXIF support -------------------------------------------------
   // piexifjs only understands JPEG's APP1 segment. PNG stores EXIF in its
   // own "eXIf" chunk, holding the same raw TIFF bytes but WITHOUT the
@@ -472,13 +430,11 @@
   function replacePngExifChunk(dataURL, tiffBytes) {
     var chunks = parsePngChunks(dataURLtoBinaryString(dataURL));
     chunks = chunks.filter(function (c) { return c.type !== "eXIf"; });
-    if (tiffBytes !== null) {
-      var ihdrIndex = 0;
-      for (var i = 0; i < chunks.length; i++) {
-        if (chunks[i].type === "IHDR") { ihdrIndex = i; break; }
-      }
-      chunks.splice(ihdrIndex + 1, 0, { type: "eXIf", data: tiffBytes });
+    var ihdrIndex = 0;
+    for (var i = 0; i < chunks.length; i++) {
+      if (chunks[i].type === "IHDR") { ihdrIndex = i; break; }
     }
+    chunks.splice(ihdrIndex + 1, 0, { type: "eXIf", data: tiffBytes });
     return binaryStringToDataURL(serializePngChunks(chunks), "image/png");
   }
 
@@ -487,10 +443,6 @@
     var exifBytesWithPrefix = piexif.dump(exifDict);
     var tiffBytes = exifBytesWithPrefix.slice(6); // drop the "Exif\0\0" prefix
     return replacePngExifChunk(photo.dataURL, tiffBytes);
-  }
-
-  function buildPngExifRemovedDataURL(photo) {
-    return replacePngExifChunk(photo.dataURL, null);
   }
 
   function formatDisplayDate(exifDateStr) {
@@ -515,8 +467,8 @@
     return col;
   }
 
-  function setCompareResult(photo, afterDataURL, afterExifDateStr, afterNote) {
-    photo.compareResult = { afterDataURL: afterDataURL, afterExifDateStr: afterExifDateStr, afterNote: afterNote };
+  function setCompareResult(photo, afterDataURL, afterExifDateStr) {
+    photo.compareResult = { afterDataURL: afterDataURL, afterExifDateStr: afterExifDateStr };
     renderCompare(photo);
   }
 
@@ -538,7 +490,7 @@
     panel.appendChild(buildCompareColumn(
       "編集後（保存したファイル）",
       photo.compareResult.afterDataURL,
-      photo.compareResult.afterNote || formatDisplayDate(photo.compareResult.afterExifDateStr) || ""
+      formatDisplayDate(photo.compareResult.afterExifDateStr) || ""
     ));
 
     var hint = document.createElement("p");
@@ -564,21 +516,10 @@
     var statusEl = document.getElementById("status-" + photo.id);
     try {
       var newDataURL = buildDateEditedDataURL(photo, exifDateStr);
-      setCompareResult(photo, newDataURL, exifDateStr, null);
+      setCompareResult(photo, newDataURL, exifDateStr);
       saveFile(newDataURL, suffixedName(photo.name, "date_edited"), statusEl);
     } catch (err) {
       setStatus(statusEl, "更新に失敗しました: " + err.message, "error");
-    }
-  }
-
-  function removeExifAndDownload(photo) {
-    var statusEl = document.getElementById("status-" + photo.id);
-    try {
-      var newDataURL = buildExifRemovedDataURL(photo);
-      setCompareResult(photo, newDataURL, null, "EXIF情報なし（削除済み）");
-      saveFile(newDataURL, suffixedName(photo.name, "no_exif"), statusEl);
-    } catch (err) {
-      setStatus(statusEl, "削除に失敗しました: " + err.message, "error");
     }
   }
 
@@ -668,19 +609,6 @@
       row.appendChild(updateBtn);
 
       info.appendChild(row);
-
-      var row2 = document.createElement("div");
-      row2.className = "row";
-      var removeBtn = document.createElement("button");
-      removeBtn.type = "button";
-      removeBtn.className = "danger";
-      removeBtn.textContent = "EXIFを完全削除してダウンロード";
-      removeBtn.addEventListener("click", function () {
-        if (!confirm("撮影日時・位置情報・機種情報などEXIF情報をすべて削除します。よろしいですか?")) return;
-        removeExifAndDownload(photo);
-      });
-      row2.appendChild(removeBtn);
-      info.appendChild(row2);
 
       var statusEl = document.createElement("div");
       statusEl.className = "status";
