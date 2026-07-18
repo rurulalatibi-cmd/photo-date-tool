@@ -137,6 +137,9 @@
         setStatus(statusEl, "更新に失敗しました: " + err.message, "error");
       }
     });
+    if (entries.length > 0) {
+      alert(entries.length + "枚の写真の撮影日時を " + formatDisplayDate(exifDate) + " に変更しました。");
+    }
     saveFiles(entries);
   });
 
@@ -512,11 +515,21 @@
     panel.appendChild(checkLabel);
   }
 
+  function showDateChangeAlert(beforeDateStr, afterDateStr) {
+    var after = formatDisplayDate(afterDateStr);
+    var message = beforeDateStr
+      ? "撮影日時を変更しました。\n\n変更前: " + formatDisplayDate(beforeDateStr) + "\n変更後: " + after
+      : "撮影日時を設定しました。\n\n" + after;
+    alert(message);
+  }
+
   function applyDateAndDownload(photo, exifDateStr) {
     var statusEl = document.getElementById("status-" + photo.id);
     try {
+      var beforeDateStr = currentExifDateString(photo);
       var newDataURL = buildDateEditedDataURL(photo, exifDateStr);
       setCompareResult(photo, newDataURL, exifDateStr);
+      showDateChangeAlert(beforeDateStr, exifDateStr);
       saveFile(newDataURL, suffixedName(photo.name, "date_edited"), statusEl);
     } catch (err) {
       setStatus(statusEl, "更新に失敗しました: " + err.message, "error");
