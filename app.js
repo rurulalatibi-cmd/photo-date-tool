@@ -70,9 +70,14 @@
     toolView.hidden = false;
   });
 
+  // Reloading (rather than just toggling views) clears any loaded photos and
+  // re-fetches the page over the network. This matters for the "Add to Home
+  // Screen" shortcut: iOS often keeps that page alive in memory across app
+  // switches instead of reloading it, so without this, going back to the
+  // home screen would keep showing whatever was loaded before — including
+  // stale code from before an update.
   backHomeBtn.addEventListener("click", function () {
-    toolView.hidden = true;
-    homeView.hidden = false;
+    window.location.href = window.location.pathname + "?t=" + Date.now();
   });
 
   showGated();
